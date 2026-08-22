@@ -1,0 +1,74 @@
+name: genimage
+
+on:
+  schedule:
+    # UTC 8:00~15:45 매 15분 (KST 17:00~00:45) — 카드 제작 세션보다 넓게
+    - cron: '*/15 8-15 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: genimage
+  cancel-in-progress: false
+
+jobs:
+  gen:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch latest posts package
+        run: |
+          set -e
+          cd "$RUNNER_TEMP"
+          npm pack @lemoon123141/gwedam-posts@latest --silent
+          tar xzf lemoon123141-gwedam-posts-*.tgz
+
+      - name: Generate missing cover images (Gemini nano banana)
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          set -e
+          PKG="$RUNNER_TEMP/package"
+          if [ ! -d "$PKG/imagereq" ]; then echo "no imagereq in latest package"; exit 0; fi
+          for d in "$PKG"/imagereq/*/; do
+            id="$(basename "$d")"
+            [ -f "$d/prompt.txt" ] || continue
+            # 이미 처리된 요청(성공/실패 불문)은 건너뜀 — 재시도는 result.json 삭제 후 수동 실행
+            if [ -e "genimg/$id/cover_bg.png" ] || [ -e "genimg/$id/result.json" ]; then
+              echo "skip $id (already handled)"; continue
+            fi
+            echo "generating for $id ..."
+            mkdir -p "genimg/$id"
+            BODY="$(jq -n --rawfile p "$d/prompt.txt" \
+              '{contents:[{parts:[{text:$p}]}],generationConfig:{responseModalities:["IMAGE"],imageConfig:{aspectRatio:"4:5"}}}')"
+            HTTP=$(curl -s -o resp.json -w "%{http_code}" --max-time 120 \
+              -H "x-goog-api-key: $GEMINI_API_KEY" \
+              -H "Content-Type: application/json" \
+              -X POST -d "$BODY" \
+              "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent")
+            if [ "$HTTP" = "200" ] && jq -e '[.candidates[0].content.parts[]? | select(.inlineData)][0].inlineData.data' resp.json >/dev/null 2>&1; then
+              jq -r '[.candidates[0].content.parts[]? | select(.inlineData)][0].inlineData.data' resp.json | base64 -d > "genimg/$id/cover_bg.png"
+              jq -n --arg id "$id" --arg at "$(date -u +%FT%TZ)" \
+                '{post:$id,status:"generated",at:$at}' > "genimg/$id/result.json"
+            else
+              ERR="$(jq -c '.error // {message:"no image in response"}' resp.json 2>/dev/null | head -c 800 || echo '{"message":"unparseable response"}')"
+              jq -n --arg id "$id" --arg http "$HTTP" --arg err "$ERR" --arg at "$(date -u +%FT%TZ)" \
+                '{post:$id,status:"error",http:$http,error:$err,at:$at}' > "genimg/$id/result.json"
+            fi
+          done
+
+      - name: Commit results
+        run: |
+          git config user.name "genimage-bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add genimg 2>/dev/null || true
+          if git diff --cached --quiet; then
+            echo "nothing to commit"
+          else
+            git commit -m "genimg: cover images"
+            git pull --rebase origin main
+            git push
+          fi
