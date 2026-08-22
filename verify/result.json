@@ -1,0 +1,22 @@
+{
+  "request_stamp": "init-20260822T114710Z",
+  "me": {
+    "user_id": "17841433148023062",
+    "username": "jeogdanghitteodeulja",
+    "account_type": "MEDIA_CREATOR",
+    "id": "27704519212582933"
+  },
+  "content_publishing_limit": {
+    "data": [
+      {
+        "quota_usage": 0,
+        "config": {
+          "quota_total": 100,
+          "quota_duration": 86400
+        }
+      }
+    ]
+  },
+  "status": "ok",
+  "finished_at_utc": "2026-08-22T12:12:01Z"
+}
