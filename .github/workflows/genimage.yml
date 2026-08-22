@@ -64,11 +64,22 @@ jobs:
         run: |
           git config user.name "genimage-bot"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add genimg 2>/dev/null || true
-          if git diff --cached --quiet; then
-            echo "nothing to commit"
-          else
+          [ -d genimg ] || { echo "no genimg dir"; exit 0; }
+          # 생성 결과를 임시 보관해두고, 항상 최신 origin/main 위에 다시 얹어서 푸시 (충돌 원천 차단)
+          cp -r genimg /tmp/genimg_out
+          for attempt in 1 2 3; do
+            git fetch origin main
+            git reset --hard origin/main
+            mkdir -p genimg
+            cp -rn /tmp/genimg_out/. genimg/ 2>/dev/null || cp -r /tmp/genimg_out/. genimg/
+            git add genimg
+            if git diff --cached --quiet; then
+              echo "nothing new to commit (attempt $attempt)"; break
+            fi
             git commit -m "genimg: cover images"
-            git pull --rebase origin main
-            git push
-          fi
+            if git push origin HEAD:main; then
+              echo "pushed (attempt $attempt)"; break
+            fi
+            echo "push rejected, retrying..."
+            sleep $((attempt * 5))
+          done
